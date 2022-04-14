@@ -1,22 +1,42 @@
 #!/bin/bash
 
-CLUSTER_TO_DELETE='whitehouse-in-cluster2'
-WORKSPACE_ID="innovation-z7tqg"
-COOKIE="MTY0NDc0NjM1M3xVdjNIX1FNOHZTQVJibWlUVkdVdkhCdmZxTU91WGNpNjVGdnB5VlFNTEg3aWNUclNQSGJVZk1TTDJTVHZPdmx3eVpxR0NILUoxNUlxajhwUEc1NlJvMndzRDNyU1RfbzJVb21XXzhqaU5ON19UQy1sdERjaFM1ejlLN3JxSm1rVjVjMjlkR3kteTZLMy1iYTBGVzlwZnBBaXpmdTY0Um89fGFOXq5Pyv8jzW2hR76eiCL9RPqSuCqaNFp7IoTnDsVd"
+KUBECONFIG=~/demo/test.conf
+CLUSTERS=($(kubectl get -o=jsonpath="{.items[*].metadata.name}{'\n'}" cluster -A --kubeconfig=$KUBECONFIG))
+NAMESPACES=($(kubectl get -o=jsonpath="{.items[*].metadata.namespace}{'\n'}" cluster -A --kubeconfig=$KUBECONFIG))
+CLUSTERCOUNT=${#CLUSTERS[@]}
+COUNTER=0
 
-[[ ! -z "$KUBECONFIG" ]] && CURRENT_CONFIG=$KUBECONFIG || CURRENT_CONFIG="$HOME/.kube/config"
-ENDPOINT=$(CAT $CURRENT_CONFIG | grep https | sed 's/ //g' | sed 's/:6443//g' | sed 's/server://g')/dkp/kommander/dashboard/graphql
-echo $ENDPOINT
+echo -e "Select a cluster to delete: \n"
+for CLUSTER in "${CLUSTERS[@]}"
+do
+    echo "$COUNTER - CLUSTER NAME: $CLUSTER in NAMESPACE ${NAMESPACES[${COUNTER}]}"
+    COUNTER=$((COUNTER+1))
+done
+echo -e "\n"
+read choice
 
-PROFILE_NAME=$(kubectl -n kommander get secret dkp-credentials -o go-template='{{.data.username|base64decode}}')
-echo $PROFILE_NAME
+CLUSTER_TO_DELETE=${CLUSTERS[${choice}]}
+WORKSPACE_ID=${NAMESPACES[${choice}]}
 
+POD=$(kubectl get po -n kommander | grep auth-mgmt | cut -d " " -f 1 )
+KOMMANDER_PROFILE_NAME=$(kubectl logs -n kommander $POD | grep -i cookie | tail -1 | grep -oP "name=\K(.*?)(?=;)")
+COOKIE_SUBSTR=$(kubectl logs -n kommander $POD | grep -i cookie | tail -1 | grep -oP "forward_auth=\K(.*?)(?=])")
+COOKIE="_forward_auth=${COOKIE_SUBSTR}"
+HOST=$(kubectl get KommanderCluster -n kommander -o yaml | grep prometheus | grep -oP "prometheus: \K(.*)$")
+ENDPOINT="https://${HOST}/dkp/kommander/dashboard/graphql"
+DATA_RAW=$"{\"operationName\":\"ForceRemoveCluster\",\"variables\":{\"id\":\"$CLUSTER_TO_DELETE\",\"workspaceId\":\"$WORKSPACE_ID\"},\"query\":\"mutation ForceRemoveCluster(\$id: String\u0021, \$workspaceId: String\u0021) {\\n  forceRemove(id: \$id, workspaceId: \$workspaceId) {\\n    message\\n    __typename\\n  }\\n}\\n\"}"
 
-curl ${ENDPOINT} \
-  -H 'accept: application/json' \
-  -H 'content-type: application/json' \
-  -H 'cookie: kommander_profile_name=${PROFILE_NAME}; _forward_auth=${COOKIE}' \
-  -H 'sec-gpc: 1' \
-  --data-raw $'{"operationName":"ForceRemoveCluster","variables":{"id":${CLUSTER_TO_DELETE},"workspaceId":${WORKSPACE_ID},"query":"mutation ForceRemoveCluster($id: String\u0021, $workspaceId: String\u0021) {\\n  forceRemove(id: $id, workspaceId: $workspaceId) {\\n    message\\n    __typename\\n  }\\n}\\n"}' \
+echo $DATA_RAW
+                      
+curl "$ENDPOINT" \
+  -H "accept: application/json" \
+  -H "content-type: application/json" \
+  -H "cookie: $COOKIE" \
+  -H "sec-gpc: 1" \
+  -H "accept-language: en-GB,en-US;q=0.9,en;q=0.8" \
+  -H "sec-fetch-dest: empty" \
+  -H "sec-fetch-mode: cors" \
+  -H "sec-fetch-site: same-origin" \
+  -d $DATA_RAW \
   --compressed \
-  --insecure
+  --insecure  
